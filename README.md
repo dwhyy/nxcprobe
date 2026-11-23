@@ -16,6 +16,8 @@ A bash wrapper around [NetExec](https://github.com/Pennyw0rth/NetExec) that auto
 ## Installation
 
 ```bash
+git clone https://github.com/dwhyy/nxcprobe.git
+cd nxcprobe
 sudo cp nxcprobe /usr/local/bin/nxcprobe
 sudo chmod +x /usr/local/bin/nxcprobe
 ```
