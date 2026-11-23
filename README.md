@@ -1,9 +1,6 @@
 # nxcprobe
 Multi-protocol credential validator built on NetExec — test recovered credentials across SMB, LDAP, WinRM, RDP, MSSQL, SSH, and FTP in a single command.
 
-
-# nxcspray
-
 A bash wrapper around [NetExec](https://github.com/Pennyw0rth/NetExec) that automates credential spraying across multiple protocols simultaneously. Built for internal penetration testing and Active Directory assessments.
 
 ## Features
@@ -19,15 +16,15 @@ A bash wrapper around [NetExec](https://github.com/Pennyw0rth/NetExec) that auto
 ## Installation
 
 ```bash
-sudo cp nxcspray /usr/local/bin/nxcspray
-sudo chmod +x /usr/local/bin/nxcspray
+sudo cp nxcprobe /usr/local/bin/nxcprobe
+sudo chmod +x /usr/local/bin/nxcprobe
 ```
 
 ## Usage
 
 ```
-nxcspray <protocols|all> <targets> -u <username|file> -p <password|file> [options]
-nxcspray <protocols|all> <targets> -u <username|file> -H <hash|file> [options]
+nxcprobe <protocols|all> <targets> -u <username|file> -p <password|file> [options]
+nxcprobe <protocols|all> <targets> -u <username|file> -H <hash|file> [options]
 ```
 
 Protocols can be specified as a comma-separated list with no spaces (e.g. `smb,winrm,rdp`) or use `all` to spray every supported protocol.
@@ -49,31 +46,31 @@ Protocols can be specified as a comma-separated list with no spaces (e.g. `smb,w
 
 ```bash
 # Single target, all protocols
-nxcspray all 10.10.10.10 -u bob -p Password123
+nxcprobe all 10.10.10.10 -u bob -p Password123
 
 # Subnet spray
-nxcspray all 10.10.10.0/24 -u bob -p Password123
+nxcprobe all 10.10.10.0/24 -u bob -p Password123
 
 # IP range spray
-nxcspray all 10.10.10.1-25 -u bob -p Password123
+nxcprobe all 10.10.10.1-25 -u bob -p Password123
 
 # Hosts file
-nxcspray all hosts.txt -u bob -p Password123
+nxcprobe all hosts.txt -u bob -p Password123
 
 # File spray — users and passwords from files
-nxcspray all hosts.txt -u users.txt -p passwords.txt
+nxcprobe all hosts.txt -u users.txt -p passwords.txt
 
 # Specific protocols only
-nxcspray smb,ldap,winrm hosts.txt -u bob -H aad3b435b51404eeaad3b435b51404ee
+nxcprobe smb,ldap,winrm hosts.txt -u bob -H aad3b435b51404eeaad3b435b51404ee
 
 # Pass-the-Hash
-nxcspray smb 10.10.10.10 -u administrator -H aad3b435b51404eeaad3b435b51404ee --local-auth
+nxcprobe smb 10.10.10.10 -u administrator -H aad3b435b51404eeaad3b435b51404ee --local-auth
 
 # Spray domain and local auth in one pass
-nxcspray all hosts.txt -u users.txt -p passwords.txt --both --continue-on-success
+nxcprobe all hosts.txt -u users.txt -p passwords.txt --both --continue-on-success
 
 # Hash file spray
-nxcspray smb hosts.txt -u SAMusers -H SAMNThashes --local-auth --continue-on-success
+nxcprobe smb hosts.txt -u SAMusers -H SAMNThashes --local-auth --continue-on-success
 ```
 
 ## Protocol Defaults
