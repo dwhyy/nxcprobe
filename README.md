@@ -13,6 +13,17 @@ A bash wrapper around [NetExec](https://github.com/Pennyw0rth/NetExec) that auto
 - **Target flexibility** — single IP, CIDR range, IP range, or hosts file
 - Skips protocols that don't support `--local-auth` (LDAP, SSH, FTP) automatically
 
+## Use Cases
+
+**Penetration Testing & Red Team**
+After recovering credentials through any means — SAM/SYSTEM dumps, LSA secrets, Kerberoasting, plaintext config files — quickly validate where those credentials work across the entire environment without manually running netexec per protocol.
+
+**Multi-Protocol Coverage**
+In real-world environments and certification labs like OSCP/CPTS, relying on a single protocol risks missing valid authentication paths. SMB may be disabled or firewalled on a host while WinRM or RDP remains open — a local credential that appears dead on SMB could grant full access over a different protocol. nxcprobe covers all supported protocols simultaneously, ensuring no valid path is missed.
+
+**Active Directory Assessments**
+Spray recovered domain and local credentials across all in-scope hosts in one pass. The `--both` flag handles domain and local authentication simultaneously, and protocols that don't support local auth (LDAP, SSH, FTP) are skipped automatically to prevent errors and wasted time.
+
 ## Installation
 
 ```bash
